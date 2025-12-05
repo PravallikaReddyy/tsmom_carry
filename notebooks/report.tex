@@ -1,0 +1,256 @@
+\documentclass{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{float}
+
+\setlength{\parindent}{0pt}
+\begin{document}
+
+\begin{center}
+    {\LARGE \textbf{Project}} \\[0.25cm]
+    {\Large \textbf{Stacking Time-Series Momentum and Carry with Risk Budgeting}} \\[0.5cm]
+
+    {\large Anand Nakhate, Aparna Ambarapu, Pravallika Reddy, Aman Savla, Yash Waghwala} \\[0.25cm]
+
+    December 4, 2025
+\end{center}
+
+\vspace{0.6cm}
+
+\begin{center}
+{\Large \textbf{Abstract}}
+\end{center}
+
+This project investigates whether combining two well-established cross-asset risk premia—Time-Series
+Momentum (TSMOM) and Carry—can produce a more robust, crisis-resilient futures trading strategy
+when implemented with modern risk budgeting techniques. Using a diversified universe of equity index,
+rates, FX, and commodity futures, we construct both back-adjusted and ratio-adjusted continuous price
+series, compute trend and carry signals, and scale positions to target a consistent level of ex-ante volatility.
+We then “stack” the two signals through a rolling ridge-regression framework that determines the optimal
+blend between TSMOM and Carry, subject to turnover constraints and sleeve-level risk caps.\\[0\baselineskip]
+
+Performance is evaluated across multiple regimes, including post-2015 markets, the COVID-19 shock,
+and the 2022 inflation cycle. We benchmark stacked portfolios against pure TSMOM, pure Carry, equal-
+weight blends, and sleeve-level risk parity. Our results show that the stacked strategy meaningfully
+improves Sharpe ratio, reduces drawdowns, and exhibits lower correlation to traditional assets, indicating
+that combining economically distinct signals within a risk-budgeted architecture enhances both statistical
+reliability and practical implementability.
+
+\section{Introduction}
+
+Time-Series Momentum (TSMOM) and Carry are two of the most widely documented and economically
+motivated sources of return in global futures markets. A large body of empirical research shows that
+assets that have trended positively in the recent past tend to continue performing well over intermediate
+horizons, while assets offering higher implied roll yield or term-structure premia generate systematically
+positive excess returns. These effects have been observed consistently across equities, interest rates,
+foreign exchange, and commodities, making them appealing building blocks for multi-asset quantitative
+strategies.\\[0\baselineskip]
+
+Despite their simplicity and transparency, the two signals capture fundamentally different economic
+mechanisms. TSMOM is typically linked to slow-moving behavioral biases, delayed information diffusion,
+and market underreaction, while Carry is associated with risk compensation for holding assets with
+unbalanced supply--demand conditions, storage premia, or interest-rate differentials. Because these drivers
+are distinct, TSMOM and Carry often exhibit low correlation, especially during periods of macroeconomic
+stress. This creates a natural motivation to study whether combining them can produce more stable and
+crisis-resilient returns than either signal alone.\\[0\baselineskip]
+
+In practice, constructing such a combined strategy requires careful attention to several implementation
+details: the formation of continuous futures price series, the treatment of roll mechanics, volatility
+normalization across assets, transaction costs, and dynamic allocation between signals. Traditional
+approaches often rely on fixed weighting schemes (such as 50/50 blends), which do not adapt to changing
+market conditions or evolving relative performance between signals. Modern systematic portfolios,
+however, increasingly make use of risk budgeting and machine-learning style regularization to determine
+signal weights in a more data-driven yet stable manner.\\[0\baselineskip]
+
+This project examines whether a risk-budgeted ``stacked'' model---which learns the optimal blend of
+TSMOM and Carry via a rolling ridge regression that minimizes realized portfolio variance subject to
+turnover and exposure constraints---can deliver superior out-of-sample performance. Using a diversified
+universe of global futures across equities, rates, FX, and commodities, we compare the stacked strategy to
+pure TSMOM, pure Carry, equal-weight combinations, and sleeve-level risk parity benchmarks. Our
+analysis emphasizes robustness across recent market regimes, including the COVID-19 dislocation and
+the 2022 inflation-driven macro environment.\\[0\baselineskip]
+
+Overall, the objective of this study is twofold: first, to assess whether combining economically distinct
+premia meaningfully improves portfolio performance; and second, to evaluate whether risk budgeting and
+regularized stacking provide a more stable and implementable approach for multi-asset signal integration.
+
+
+\section{Data and Preprocessing}
+
+A critical component of any multi-asset systematic strategy is the construction of a clean, reliable,
+and well-documented dataset. Our data pipeline integrates raw futures data sourced from Databento
+into a standardized format suitable for signal generation, portfolio construction, and cross-asset
+comparability. The pipeline performs loading, cleaning, metadata enrichment, sanity checks, and temporal
+coverage validation before any modeling takes place.
+
+\subsection{Universe}
+
+We consider major exchange-traded futures across four sleeves, closely following the asset coverage in
+Moskowitz et al.\ (2012) and Koijen et al.\ (2018):
+
+\begin{itemize}
+    \item \textbf{Equities}: ES (S\&P 500), NQ (Nasdaq 100), RTY (Russell 2000), NKD (Nikkei 225)
+    
+    \item \textbf{Rates}: ZT (2Y Treasury), ZF (5Y Treasury), ZN (10Y Treasury), 
+          ZB (30Y Treasury Bond), UB (Ultra Bond)
+
+    \item \textbf{FX (G10 currency futures)}: 6E (EUR), 6J (JPY), 6B (GBP), 
+          6A (AUD), 6C (CAD), 6S (CHF), 6N (NZD)
+
+    \item \textbf{Commodities – Energy}: CL (Crude Oil), NG (Natural Gas), HO (Heating Oil), RB (RBOB Gasoline)
+
+    \item \textbf{Commodities – Metals}: GC (Gold), SI (Silver), HG (Copper)
+
+    \item \textbf{Commodities – Grains}: ZC (Corn), ZW (Wheat), ZS (Soybeans), 
+          ZL (Soybean Oil), ZM (Soybean Meal)
+\end{itemize}
+
+This universe mirrors typical cross-asset TSMOM and Carry implementations and provides broad coverage
+across economic sectors.
+
+\subsection{Horizon}
+
+Where available, historical data extend back to 1990. In practice, our consolidated Databento dataset spans
+January 2015 through December 2024 for most contracts, with an out-of-sample evaluation window from
+2019 onward. Assets with shorter histories, such as RTY, are included but evaluated with caution.
+
+\subsection{Fields}
+
+For each contract, we ingest standard daily fields:
+
+\begin{itemize}
+    \item open, high, low, close, settlement prices
+    \item volume and open interest
+    \item contract specifications (tick size, multiplier)
+    \item \texttt{front} and \texttt{back} contract prices for computing Carry
+    \item metadata fields: asset class, sleeve, region, parent symbol
+\end{itemize}
+
+These fields enable continuous contract construction, roll logic, volatility estimation, and carry computation.
+
+\subsection{Data Intake and Cleaning Pipeline}
+
+The pipeline begins with importing the dataset and applying several cleaning steps:
+
+\begin{enumerate}
+    \item \textbf{Load raw Databento dataset}: A single consolidated CSV containing all futures symbols.
+    \item \textbf{Enforce data types}: Convert date fields, numerical columns, and categorical metadata.
+    \item \textbf{Sort chronologically} by contract and date.
+    \item \textbf{Remove duplicate rows}: Our dataset contained 3,323 duplicates, all of which were dropped.
+    \item \textbf{Metadata enrichment}: Assign each instrument its parent root, asset class (equity, rate, FX, commodity),
+          sleeve, and region.
+\end{enumerate}
+
+A summary printed during execution confirms the final dataset size:
+
+\begin{quote}
+\texttt{Loaded 608,378 rows.}
+\end{quote}
+
+\subsection{Data Integrity Checks}
+
+To ensure data quality before constructing continuous contracts or computing signals, we run a series of
+sanity checks:
+
+\begin{itemize}
+    \item missing values by field
+    \item negative prices (rare but possible with data vendor inconsistencies)
+    \item malformed OHLC entries (e.g., high < low)
+    \item checks for unrealistic or zero volumes
+\end{itemize}
+
+In our dataset, we find:
+
+\begin{quote}
+\texttt{1 row with negative prices \,(CL.FUT).}  
+\texttt{0 bad OHLC rows, 0 nonpositive volume rows.}
+\end{quote}
+
+These checks allow us to flag and isolate irregularities before signal calculation.
+
+\subsection{Universe Audit}
+
+To validate that each parent symbol has sufficient coverage for modeling, we generate an audit table
+containing:
+
+\begin{itemize}
+    \item first available date
+    \item last available date
+    \item number of days of data
+    \item average daily contract count
+    \item average daily volume
+\end{itemize}
+
+This ensures adequate historical depth for robust signal estimation and volatility scaling.
+
+\subsection{Temporal Coverage Visualization}
+
+Finally, we visualize the availability of each asset using a horizontal bar chart showing start and end dates.
+This provides an intuitive overview of contract history and helps identify shorter-lived series such as RTY.
+An example of the resulting coverage plot is shown in Figure
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\textwidth]{figures/coverage_plot.png}
+    \caption{Universe Coverage: Temporal Availability across Futures Contracts.}
+    \label{fig:coverage}
+\end{figure}
+
+Taken together, these preprocessing steps ensure that our dataset is clean, consistent, and ready for
+constructing continuous futures series and computing TSMOM and Carry signals.
+
+\subsection{Liquidity Profile}
+
+In addition to temporal coverage, we assess the liquidity characteristics of each futures contract by
+computing the average daily trading volume over the full sample. Liquidity is an essential consideration
+for any multi-asset trading strategy, as it affects implementation costs, slippage, and the reliability of
+volatility estimates.
+
+Using the universe audit table, we sort contracts by their mean daily volume and visualize the results
+with a horizontal bar chart. This allows us to quickly identify high-volume instruments such as ZN, ZF,
+and ES, as well as thinner markets including HO, RB, and certain agricultural contracts.
+
+Figure~\ref{fig:liquidity} reports the liquidity distribution across all roots in the dataset.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\textwidth]{figures/liquidity_plot.png}
+    \caption{Average Daily Volume across Futures Contracts.}
+    \label{fig:liquidity}
+\end{figure}
+
+This analysis ensures that downstream modeling places appropriate emphasis on consistently traded
+contracts and helps inform position scaling and turnover constraints in later stages of the strategy.
+
+
+\subsection{Saving the Cleaned Dataset}
+
+After completing all cleaning, enrichment, and integrity checks, the final dataset is exported in Parquet
+format, which provides compressed columnar storage and efficient I/O for downstream analysis. The
+cleaned dataset contains 608{,}378 rows across all futures roots and includes standardized fields required
+for constructing continuous contracts and computing signals. The export routine writes the file
+\texttt{master\_dataset\_cleaned.parquet} to the processed data directory.
+
+\subsection{Summary of Preprocessing Pipeline}
+
+In summary, the preprocessing workflow includes:
+
+\begin{itemize}
+    \item ingestion of raw Databento GLBX.MDP3 futures data;
+    \item type enforcement, chronological sorting, and duplicate removal;
+    \item metadata enrichment (asset class, sleeve, region, parent root);
+    \item sanity checks for missing values, negative prices, and malformed OHLC data;
+    \item universe audits for historical depth and liquidity;
+    \item visualization of temporal coverage and liquidity profiles;
+    \item export of a fully cleaned, analysis-ready dataset.
+\end{itemize}
+
+These steps ensure that the dataset entering the modeling stage is consistent, reliable, and suitable for
+constructing continuous futures series and computing TSMOM and Carry signals.
+
+
+
+\end{document}
+
